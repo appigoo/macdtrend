@@ -1,4 +1,4 @@
-# app.py  ← 直接存成這個檔名上傳 GitHub 或 Streamlit
+# app.py  ← 直接存成這個檔名上傳即可
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,7 +12,7 @@ st.set_page_config(page_title="多股票趨勢監控", layout="wide")
 st.title("多股票即時趨勢監控 + Telegram 警報")
 
 # ============================ Telegram 推播（防洗版） ============================
-ALERT_LOG = {}  # {key: 最後發送時間}
+ALERT_LOG = {}
 
 def send_telegram(text):
     if "telegram_token" not in st.secrets:
@@ -32,7 +32,7 @@ def send_once(key: str, text: str, cooldown: int = 3600):
         send_telegram(f"{text}")
         ALERT_LOG[key] = now
 
-# ============================ 超穩定指標（全部用 .values 防炸） ============================
+# ============================ 超穩定指標 ============================
 def supertrend(df, period=10, multiplier=3):
     df = df.copy()
     h, l, c = df['High'].values, df['Low'].values, df['Close'].values
@@ -66,7 +66,7 @@ def supertrend(df, period=10, multiplier=3):
         st_line[i] = final_lower[i] if trend[i] == 1 else final_upper[i]
     
     df['SuperTrend'] = st_line
-    df['ST_Direction'] = trend  # 1=多頭, -1=空頭
+    df['ST_Direction'] = trend
     return df
 
 def add_macd(df):
@@ -120,26 +120,24 @@ def get_data(symbol, period, interval):
     except:
         return None
 
-# ============================ 警報邏輯 ============================
+# ============================ 警報 ============================
 def trigger_alerts(df, symbol):
     if len(df) < 60:
         return
     try:
-        # SuperTrend 翻轉
         if df["ST_Direction"].iloc[-2] == -1 and df["ST_Direction"].iloc[-1] == 1:
             send_once(f"{symbol}_st_up", f"{symbol}\nSuperTrend 翻多", 86400)
         if df["ST_Direction"].iloc[-2] == 1 and df["ST_Direction"].iloc[-1] == -1:
             send_once(f"{symbol}_st_down", f"{symbol}\nSuperTrend 翻空", 86400)
-            
-        # MACD Hist 三連升 + ADX 強勢
         if (df["Hist"].iloc[-3] < df["Hist"].iloc[-2] < df["Hist"].iloc[-1] and 
             df["ADX"].iloc[-1] > 25):
-            send_once(f"{symbol}_macd3", f"{symbol}\nMACD Hist 三連升 + ADX > 25\n強勢啟動", 7200)
+            send_once(f"{symbol}_macd3", f"{symbol}\nMACD Hist 三連升 + ADX > 25", 7200)
     except:
         pass
 
-# ============================ UI 介面 ============================
-col1, col2 = st.containers([3, 1])
+# ============================ UI 介面（已修正） ============================
+col1, col2 = st.columns([3, 1])   # 這行改成 st.columns
+
 with col1:
     symbols_input = st.text_input("輸入股票代號（逗號分隔）", 
                                   value="AAPL,TSLA,NVDA,2330.TW,0050.TW")
@@ -152,7 +150,7 @@ period = st.selectbox("回看期間", ["5d", "10d", "1mo", "3mo", "6mo", "1y"], 
 refresh = st.selectbox("自動刷新", ["關閉", "30秒", "1分鐘", "2分鐘"], index=1)
 if refresh != "關閉":
     seconds = {"30秒": 30, "1分鐘": 60, "2分鐘": 120}[refresh]
-    st.toast(f"將在 {refresh} 後自動刷新...", icon="clock")
+    st.toast(f"將在 {refresh} 後刷新", icon="timer")
     time.sleep(seconds)
     st.rerun()   # 唯一正確寫法
 
@@ -170,7 +168,6 @@ for symbol in symbols:
             st.error(f"無法取得 {symbol} 資料")
             continue
 
-        # 計算所有指標
         df = add_macd(df)
         df = add_rsi(df)
         df = add_adx(df)
@@ -179,18 +176,15 @@ for symbol in symbols:
         df["MA50"] = df["Close"].rolling(50).mean()
         df = supertrend(df)
 
-        # 趨勢判斷
         trend_dir = "上升" if df["MACD"].iloc[-1] > df["Signal"].iloc[-1] else "下降"
         strength = "強勢" if df["ADX"].iloc[-1] > 25 else "弱勢"
         rsi_val = df["RSI"].iloc[-1]
 
         st.write(f"**趨勢**：{trend_dir} | **強度**：{strength} | RSI {rsi_val:.1f}")
 
-        # 圖表
         chart_data = df[["Close", "MA20", "MA50", "VWAP", "SuperTrend"]].copy()
         st.line_chart(chart_data.tail(300))
 
-        # 觸發警報
         trigger_alerts(df, symbol)
 
 st.success("所有股票監控完成")
