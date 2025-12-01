@@ -1,16 +1,17 @@
-# app.py  ← 完整進階版（已包含 成交量爆量 + 多時框共振）
+# app.py  ← 終極專業版（互動K線圖 + 買賣訊號標記 + 爆量 + 多時框共振）
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import requests
+import plotly.graph_objects as go
 from datetime import datetime
 import time
 
-st.set_page_config(page_title="多股票趨勢監控 Pro", layout="wide")
-st.title("多股票趨勢監控 Pro（爆量 + 多時框共振 + Telegram）")
+st.set_page_config(page_title="專業級股票監控 Pro", layout="wide")
+st.title("專業級多股票監控（互動K線 + 買賣訊號 + 爆量 + 多時框共振）")
 
-# ============================ Telegram 推播 ============================
+# ============================ Telegram ============================
 ALERT_LOG = {}
 
 def send_telegram(text):
@@ -28,10 +29,10 @@ def send_telegram(text):
 def send_once(key: str, text: str, cooldown: int = 3600):
     now = time.time()
     if ALERT_LOG.get(key, 0) + cooldown < now:
-        send_telegram(f"<b>【強勢訊號】</b>\n{text}")
+        send_telegram(f"<b>強勢訊號</b>\n{text}")
         ALERT_LOG[key] = now
 
-# ============================ 超穩定指標函數（同前）========================
+# ============================ 指標函數（同前）========================
 def supertrend(df, period=10, multiplier=3):
     df = df.copy()
     h, l, c = df['High'].values, df['Low'].values, df['Close'].values
@@ -66,29 +67,6 @@ def add_macd(df):
     df["Hist"] = df["MACD"] - df["Signal"]
     return df
 
-def add_rsi(df, period=14):
-    delta = df["Close"].diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-    return df
-
-def add_adx(df, period=14):
-    h, l, c = df['High'].values, df['Low'].values, df['Close'].values
-    tr = np.maximum.reduce([h-l, np.abs(h-np.roll(c,1)), np.abs(l-np.roll(c,1))])
-    tr[0] = h[0]-l[0]
-    atr = pd.Series(tr).rolling(period).mean()
-    up = h - np.roll(h,1)
-    down = np.roll(l,1) - l
-    plus_dm = np.where((up > down) & (up > 0), up, 0)
-    minus_dm = np.where((down > up) & (down > 0), down, 0)
-    plus_di = 100 * pd.Series(plus_dm).ewm(alpha=1/period, adjust=False).mean() / atr
-    minus_di = 100 * pd.Series(minus_dm).ewm(alpha=1/period, adjust=False).mean() / atr
-    dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
-    df["ADX"] = dx.ewm(alpha=1/period, adjust=False).mean()
-    return df
-
 def add_vwap(df):
     df["PV"] = df["Close"] * df["Volume"]
     df["CumPV"] = df["PV"].cumsum()
@@ -96,10 +74,8 @@ def add_vwap(df):
     df["VWAP"] = df["CumPV"] / df["CumVol"]
     return df
 
-# 新增：成交量爆量偵測
 def detect_volume_spike(df, window=20, threshold=2.0):
-    if len(df) < window + 1:
-        return False
+    if len(df) < window + 1: return False
     avg_vol = df["Volume"].iloc[-window:-1].mean()
     current_vol = df["Volume"].iloc[-1]
     return current_vol > avg_vol * threshold
@@ -113,55 +89,103 @@ def get_data(symbol, period, interval):
     except:
         return None
 
-# ============================ 進階警報（爆量 + 多時框共振）========================
+# ============================ 互動式專業K線圖 ============================
+def plot_candlestick_chart(df, symbol):
+    df = df.tail(200).copy()  # 只顯示最近200根
+    
+    # 買賣訊號標記
+    df['Buy_Signal'] = (df['ST_Direction'].shift(1) == -1) & (df['ST_Direction'] == 1)
+    df['Sell_Signal'] = (df['ST_Direction'].shift(1) == 1) & (df['ST_Direction'] == -1)
+    
+    fig = go.Figure()
+
+    # K線
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+        name="K線", increasing_line_color='red', decreasing_line_color='green'
+    ))
+
+    # SuperTrend
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df['SuperTrend'], mode='lines',
+        name='SuperTrend', line=dict(width=2, color='purple')
+    ))
+
+    # VWAP
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df['VWAP'], mode='lines',
+        name='VWAP', line=dict(width=1.5, color='orange', dash='dot')
+    ))
+
+    # MA20 & MA50
+    df["MA20"] = df["Close"].rolling(20).mean()
+    df["MA50"] = df["Close"].rolling(50).mean()
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], name="MA20", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA50"], name="MA50", line=dict(color="gold")))
+
+    # 買賣訊號
+    buy_signals = df[df['Buy_Signal']]
+    sell_signals = df[df['Sell_Signal']]
+    fig.add_trace(go.Scatter(
+        x=buy_signals.index, y=buy_signals['Low'] * 0.985,
+        mode='markers', name='買入訊號',
+        marker=dict(symbol='triangle-up', size=16, color='lime', line=dict(width=2))
+    ))
+    fig.add_trace(go.Scatter(
+        x=sell_signals.index, y=sell_signals['High'] * 1.015,
+        mode='markers', name='賣出訊號',
+        marker=dict(symbol='triangle-down', size=16, color='red', line=dict(width=2))
+    ))
+
+    # 成交量
+    colors = ['red' if o >= c else 'green' for o, c in zip(df['Open'], df['Close'])]
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color=colors, yaxis='y2'))
+
+    fig.update_layout(
+        title=f"{symbol} 專業走勢圖",
+        xaxis_title="時間", yaxis_title="價格",
+        yaxis2=dict(title="成交量", overlaying='y', side='right'),
+        legend=dict(x=0, y=1.1, orientation="h"),
+        height=650,
+        template="plotly_dark"
+    )
+    fig.update_xaxes(rangeslider_visible=False)
+    return fig
+
+# ============================ 進階警報 ============================
 def trigger_advanced_alerts(symbol):
-    intervals = ["5m", "15m", "1h"]
-    directions = []
-    
-    for interval in intervals:
-        df = get_data(symbol, period="5d", interval=interval)
-        if df is None or len(df) < 60:
-            return
-        df = add_macd(df)
-        df = add_adx(df)
-        df = supertrend(df)
-        
-        # 判斷當前趨勢
-        current_dir = df["ST_Direction"].iloc[-1]
-        prev_dir = df["ST_Direction"].iloc[-2]
-        directions.append((current_dir, prev_dir, interval))
-    
-    # 1. 爆量警報（用 5 分鐘資料）
     df_5m = get_data(symbol, "5d", "5m")
-    if df_5m is not None and len(df_5m) > 20:
+    if df_5m is not None and len(df_5m) > 60:
         df_5m = add_macd(df_5m)
         df_5m = supertrend(df_5m)
-        if detect_volume_spike(df_5m, window=20, threshold=2.5):
-            if df_5m["ST_Direction"].iloc[-1] == 1:
-                send_once(f"{symbol}_vol_up", f"{symbol}\n成交量爆量 2.5 倍以上\n同時 SuperTrend 多頭\n極強起漲訊號！", 86400)
+        if detect_volume_spike(df_5m, threshold=2.5) and df_5m["ST_Direction"].iloc[-1] == 1:
+            send_once(f"{symbol}_vol", f"{symbol}\n成交量爆量 + SuperTrend 多頭\n極強起漲！", 86400)
 
-    # 2. 多時框共振（三個時框同時翻多）
-    up_count = sum(1 for cur, prev, intv in directions if cur == 1 and prev == -1)
-    if up_count >= 2:  # 至少兩個時框同時翻多
-        msg = f"{symbol}\n多時框共振啟動！\n"
-        for cur, prev, intv in directions:
-            if cur == 1 and prev == -1:
-                msg += f"{intv} 翻多\n"
-        send_once(f"{symbol}_multi_tf", msg + "強勢多頭共振", 86400*3)
+    # 多時框共振（5m + 15m + 1h 同時翻多）
+    flips = 0
+    for intv in ["5m", "15m", "1h"]:
+        df = get_data(symbol, "5d", intv)
+        if df is not None and len(df) > 60:
+            df = supertrend(df)
+            if df["ST_Direction"].iloc[-2] == -1 and df["ST_Direction"].iloc[-1] == 1:
+                flips += 1
+    if flips >= 2:
+        send_once(f"{symbol}_tf", f"{symbol}\n多時框共振！{flips}個時間框同時翻多\n強勢啟動！", 86400*2)
 
 # ============================ UI ============================
 col1, col2 = st.columns([3, 1])
 with col1:
-    symbols_input = st.text_input("股票代號", "NIO,TSLA,NVDA,XPEV,GOOGL,META")
+    symbols_input = st.text_input("股票代號", value="AAPL,TSLA,NVDA,2330.TW,BTC-USD")
 with col2:
-    interval = st.selectbox("主要時間框", ["5m","15m","1h","1d"], index=1)
+    interval = st.selectbox("時間框", ["5m","15m","1h","1d"], index=1)
 
 period = st.selectbox("期間", ["5d","10d","1mo","3mo"], index=0)
 
-refresh = st.selectbox("自動刷新", ["關閉", "30秒", "1分鐘"], index=1)
+refresh = st.selectbox("自動刷新", ["關閉","30秒","1分鐘"], index=1)
 if refresh != "關閉":
     sec = {"30秒":30, "1分鐘":60}[refresh]
-    st.write(f"自動刷新倒數 {refresh}...")
+    st.write(f"自動刷新中... {refresh}")
     time.sleep(sec)
     st.rerun()
 
@@ -170,29 +194,29 @@ st.info(f"更新時間：{datetime.now().strftime('%H:%M:%S')}")
 symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
 
 for symbol in symbols:
-    with st.expander(f"{symbol}", expanded=True):
-        df = get_data(symbol, period, interval)
-        if df is None or df.empty:
-            st.error("無資料")
-            continue
+    with st.container():
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            st.subheader(f"{symbol}")
+            df = get_data(symbol, period, interval)
+            if df is None or df.empty:
+                st.error("無資料")
+                continue
+            df = add_macd(df)
+            df = add_vwap(df)
+            df = supertrend(df)
+            df["MA20"] = df["Close"].rolling(20).mean()
+            df["MA50"] = df["Close"].rolling(50).mean()
 
-        df = add_macd(df)
-        df = add_rsi(df)
-        df = add_adx(df)
-        df = add_vwap(df)
-        df["MA20"] = df["Close"].rolling(20).mean()
-        df["MA50"] = df["Close"].rolling(50).mean()
-        df = supertrend(df)
+            trend = "上升" if df["MACD"].iloc[-1] > df["Signal"].iloc[-1] else "下降"
+            strength = "強勢" if len(df) > 14 and df["Close"].rolling(14).std().iloc[-1] * 10 > df["Close"].iloc[-1] * 0.02 else "弱勢"
+            vol_status = "爆量" if detect_volume_spike(df) else "正常"
+            st.write(f"**趨勢**：{trend} | **強度**：{strength} | **成交量**：{vol_status}")
 
-        trend = "上升" if df["MACD"].iloc[-1] > df["Signal"].iloc[-1] else "下降"
-        strength = "強勢" if df["ADX"].iloc[-1] > 25 else "弱勢"
-        vol_status = "爆量" if detect_volume_spike(df) else "正常"
-        
-        st.write(f"趨勢：{trend} | 強度：{strength} | 成交量：{vol_status} | RSI {df['RSI'].iloc[-1]:.1f}")
+        with col_b:
+            fig = plot_candlestick_chart(df, symbol)
+            st.plotly_chart(fig, use_container_width=True)
 
-        st.line_chart(df[["Close","MA20","MA50","VWAP","SuperTrend"]].tail(200))
-
-        # 觸發進階警報（每支股票獨立觸發）
         trigger_advanced_alerts(symbol)
 
-st.success("Pro 版監控完成！爆量與共振訊號已啟動")
+st.success("專業監控完成！所有買賣訊號已標記在圖表上")
