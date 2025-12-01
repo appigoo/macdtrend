@@ -142,7 +142,7 @@ def trigger_alerts(df, symbol):
 col1, col2 = st.containers([3, 1])
 with col1:
     symbols_input = st.text_input("輸入股票代號（逗號分隔）", 
-                                  value="TSLA,NIO,META,XPEV,GOOGL,NVDA")
+                                  value="TSLA,NIO,META,XPEV,GOOGL")
 with col2:
     interval = st.selectbox("時間框", ["5m", "15m", "30m", "1h", "1d"], index=1)
 
