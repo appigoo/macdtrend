@@ -8,7 +8,7 @@ from datetime import datetime
 import time
 
 st.set_page_config(page_title="專業級股票與加密貨幣監控", layout="wide")
-st.title("專業級多股票監控（互動K線 + 爆量 + 買賣訊號）")
+st.title("專業級多股票監控（互動K線 + 爆量 + 買賣訊號 + 股價走勢圖 + 成交量變化）")
 
 ALERT_LOG = {}
 
@@ -123,6 +123,39 @@ def plot_chart(df, symbol):
     fig.update_xaxes(rangeslider_visible=False)
     return fig
 
+# 新增：股價走勢圖 + 成交量變化圖（線圖形式，強調變化）
+def plot_trend_and_volume_change(df, symbol):
+    df = df.tail(200).copy()
+    
+    # 股價變化率（百分比）
+    df['Price_Change'] = df['Close'].pct_change() * 100
+    
+    # 成交量變化率（百分比）
+    df['Volume_Change'] = df['Volume'].pct_change() * 100
+    
+    fig = go.Figure()
+    
+    # 股價走勢線
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='股價走勢', line=dict(color='cyan', width=2), yaxis='y1'))
+    
+    # 股價變化柱狀圖（強調漲跌）
+    colors_change = ['green' if ch >= 0 else 'red' for ch in df['Price_Change']]
+    fig.add_trace(go.Bar(x=df.index, y=df['Price_Change'], name='股價變化 (%)', marker_color=colors_change, yaxis='y2'))
+    
+    # 成交量變化線
+    fig.add_trace(go.Scatter(x=df.index, y=df['Volume_Change'], name='成交量變化 (%)', line=dict(color='yellow', dash='dot'), yaxis='y3'))
+
+    fig.update_layout(
+        title=f"{symbol} 股價走勢與成交量變化",
+        height=400,
+        template="plotly_dark",
+        yaxis1=dict(title="股價", side='left', position=0.0),
+        yaxis2=dict(title="股價變化 (%)", overlaying='y', side='right', position=0.95),
+        yaxis3=dict(title="成交量變化 (%)", overlaying='y', side='right', position=1.0, anchor='free'),
+        xaxis=dict(rangeslider_visible=False)
+    )
+    return fig
+
 # UI
 col1, col2 = st.columns([3,1])
 with col1:
@@ -157,6 +190,11 @@ for symbol in symbols:
         with c2:
             fig = plot_chart(df, symbol)
             st.plotly_chart(fig, use_container_width=True)
+        
+        # 新增：顯示股價走勢與成交量變化圖
+        st.subheader(f"{symbol} 股價與成交量變化圖")
+        trend_fig = plot_trend_and_volume_change(df, symbol)
+        st.plotly_chart(trend_fig, use_container_width=True)
 
         # 爆量警報
         if detect_volume_spike(df, threshold=2.5) and df["ST_Direction"].iloc[-1] == 1:
